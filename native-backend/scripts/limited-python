@@ -1,0 +1,17 @@
+#!/usr/bin/env python3
+"""Fixed REA interpreter shim. Only deployed code selects argv; never request input."""
+import os
+import resource
+import sys
+
+for kind, maximum in (
+    (resource.RLIMIT_AS, 320 * 1024 * 1024),
+    (resource.RLIMIT_CPU, 12),
+    (resource.RLIMIT_FSIZE, 2 * 1024 * 1024),
+    (resource.RLIMIT_NOFILE, 64),
+    (resource.RLIMIT_CORE, 0),
+):
+    soft, hard = resource.getrlimit(kind)
+    cap = min([maximum] + [v for v in (soft, hard) if v != resource.RLIM_INFINITY])
+    resource.setrlimit(kind, (cap, cap))
+os.execv(sys.executable, [sys.executable, *sys.argv[1:]])
