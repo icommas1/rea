@@ -43,3 +43,26 @@ test('real HTTP cancellation keeps service healthy and accepting requests', {ski
    assert.equal(next.status,422);
  }finally {await new Promise(r=>server.close(r));await rm(root,{recursive:true,force:true})}
 });
+test('WebCrypto Ed25519 signature authorizes real native ELF analysis exactly once', {skip:!enabled}, async()=>{
+ const {createServer}=await import('../src/server.mjs');
+ const {canonicalChallenge}=await import('../src/auth.mjs');
+ const {generateKeyPairSync,createHash,webcrypto}=await import('node:crypto');
+ const keys=generateKeyPairSync('ed25519');
+ const signingKey=await webcrypto.subtle.importKey('pkcs8',keys.privateKey.export({format:'der',type:'pkcs8'}),{name:'Ed25519'},false,['sign']);
+ const root=await mkdtemp('/tmp/rea-signed-native-');
+ const path=join(root,'fixture.o');execFileSync('cc',['-c','-O0','-o',path,new URL('./fixture.c',import.meta.url).pathname]);
+ const bytes=await readFile(path);
+ const server=createServer({key:undefined,publicKeyPem:keys.publicKey.export({format:'pem',type:'spki'}),issuer:'https://test-site.example',audience:'https://test-backend.example',tempParent:join(root,'jobs')});
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));
+ const base=`http://127.0.0.1:${server.address().port}`;
+ try {
+   const challengeResponse=await fetch(base+'/v1/challenge',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({method:'POST',path:'/v1/analyze',bodySha256:createHash('sha256').update(bytes).digest('hex'),bodyBytes:bytes.length})});
+   assert.equal(challengeResponse.status,200);const challenge=await challengeResponse.json();
+   const signature=Buffer.from(await webcrypto.subtle.sign({name:'Ed25519'},signingKey,Buffer.from(canonicalChallenge(challenge)))).toString('base64url');
+   const authorization='REA-Ed25519 '+Buffer.from(JSON.stringify({kid:challenge.kid,nonce:challenge.nonce,signature})).toString('base64url');
+   const options={method:'POST',headers:{authorization,'content-type':'application/octet-stream'},body:bytes};
+   const response=await fetch(base+'/v1/analyze',options);assert.equal(response.status,200);const result=await response.json();
+   assert.equal(result.layout.image_type,'ET_REL');assert.ok(JSON.stringify(result.layout.symbols).includes('rea_fixture_add'));assert.ok(result.layout.relocations.length>0);
+   assert.equal((await fetch(base+'/v1/analyze',options)).status,401);
+ }finally{await new Promise(r=>server.close(r));await rm(root,{recursive:true,force:true})}
+});
