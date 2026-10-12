@@ -1,0 +1,10 @@
+node_modules
+.venv
+.git
+.env*
+*.tgz
+*.tar.gz
+test
+
+__pycache__/
+*.pyc
