@@ -1,0 +1,10 @@
+{
+  "name": "rea-native-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Bounded, authenticated REA ELF layout HTTP adapter",
+  "engines": {"node": ">=24.11.0 <25"},
+  "scripts": {"start":"node --max-old-space-size=128 src/server.mjs", "test":"node --test", "test:integration":"REA_INTEGRATION=1 node --test test/integration.test.mjs"},
+  "dependencies": {"rea-agents":"6.4.0"}
+}
