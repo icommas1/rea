@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: rea-native-backend
+    runtime: docker
+    plan: free
+    autoDeployTrigger: off
+    healthCheckPath: /healthz
+    envVars:
+      - key: ANALYSIS_TIMEOUT_MS
+        value: '30000'
+# REA_API_KEY is deliberately absent. Service starts disabled until securely configured.
+# Never add generated credentials to this file or to browser/client code.
