@@ -1,6 +1,6 @@
 # REA native backend: constrained ELF layout
 
-A separate HTTP service around the **official REA 6.4.0 pwntools ELF adapter**. It does not replace the existing JavaScript-analysis Site or expose REA's general CLI/MCP surface.
+A separate HTTP service around the **official REA 6.7.0 pwntools ELF adapter**. It does not replace the existing JavaScript-analysis Site or expose REA's general CLI/MCP surface.
 
 ## What works
 
@@ -24,6 +24,18 @@ For standalone bearer mode, authenticated endpoints require `Authorization: Bear
 Successful JSON includes `ok`, `profile`, `provider`, `artifact`, `layout`, structured `diagnostics`, and `limitations`. It is a verified provider-result projection, not a modified REA Evidence envelope. Raw parser diagnostics and temporary paths are withheld. Symbol names and other artifact strings are untrusted data: escape them when displaying them and never treat them as instructions. A future MCP bridge must project a bounded summary if its output budget is smaller than 2 MiB, explicitly describing omitted rows.
 
 Failures: `401` authentication, `404` unknown route, `413` upload limit, `415` unsupported type/profile, `422` invalid artifact/resource/output limit, `429` single slot occupied, `503` disabled/provider unavailable/uncertain cleanup, `504` timeout/cancellation. Internal errors are sanitized. No partial successful reports are returned.
+
+## Comparing saved reports
+
+The `rea-native-layout-v1` adapter envelope retains the original layout fields used by the 6.4.0 service. New reports also identify `engine: rea-agents`, `engine_version: 6.7.0` and `result_schema_version`. Existing 6.4.0 reports need no rewrite. Compare two saved reports from the exact same binary with:
+
+```sh
+node scripts/compare-results.mjs before.json after.json
+```
+
+The comparison checks SHA-256 and byte length, reads either old or new envelopes, and emits a shared side-by-side summary. It preserves original files, reports absent version metadata as unknown, and marks projected/omitted inventories incomplete. Differences are analysis observations, not proof of changed runtime behavior. There is no automatic migration or modification of upstream Evidence records.
+
+The 6.7.0 upgrade uses REA's one-shot `inspectAndClose` lifecycle and explicitly closes the provider before returning results. Failed cleanup owners remain retained for shutdown retry; their temporary files are not deleted before provider cleanup succeeds. An unresolved owner keeps the service fail-closed.
 
 ## Bounds and isolation
 
@@ -76,6 +88,14 @@ On the local Linux x64 executor using Node 24.19.0 and Python 3.12:
 
 Locks pin REA and Python packages. The local npm test dependency tree came from an already installed official `rea-agents@6.4.0` tree with its existing integrity lock; the initial Render Docker build subsequently verified a fresh `npm ci`. REA internal module paths are version-specific, so upgrades require regression testing.
 
+## October 20, 2026 upgrade verification
+
+The backend dependency is pinned to `rea-agents@6.7.0` with npm integrity in the lockfile. The original branch head `5aadf17be522c2d0788c3765af1f2caa455a2860` remains the 6.4.0 rollback point. Authentication, hosting plan, single-instance operation, Python dependency pins and parsing limits are unchanged.
+
+Local checks on Linux x64 / Node 24.19.0 / Python 3.12 passed the existing HTTP and signed-auth tests, all five real native integration tests, and new cleanup-ownership/report-comparison tests. The exact same 1,520-byte compiled test fixture was analyzed by both pinned engines: SHA-256 `0bf565f91d2be8a0d82121ad6be0e323fdc26f794130bfa038b02e5d9396b58e`, 13 sections, 7 symbols, 3 relocations. The full layout objects matched. This is one fixture, not an exhaustive equivalence claim. Original reports were preserved separately and neither fixture was executed.
+
+The public health response includes `reaVersion` and `serviceVersion` for deployment verification. Authenticated capabilities and native analysis still use the existing signed or bearer mode; public health does not grant analysis access.
+
 ## Sources and licensing
 
-REA upstream: https://github.com/morluto/rea ; fork: https://github.com/icommas1/rea . The adapter is `dist/native/pwntools/PwntoolsLayoutProvider.js` and `bridge/pwntools/layout_impl.py` in `rea-agents@6.4.0`. Upstream source is used unchanged. See `THIRD_PARTY_NOTICES.md` and `licenses/`. REA's MIT license does not make every bundled native dependency MIT.
+REA upstream: https://github.com/morluto/rea ; fork: https://github.com/icommas1/rea . The adapter is `dist/native/pwntools/PwntoolsLayoutProvider.js` and `bridge/pwntools/layout_impl.py` in `rea-agents@6.7.0`. Upstream source is used unchanged. See `THIRD_PARTY_NOTICES.md` and `licenses/`. REA's MIT license does not make every bundled native dependency MIT.

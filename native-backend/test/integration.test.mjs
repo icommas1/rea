@@ -11,6 +11,7 @@ test('official REA parses ELF object with real symbols and relocations', {skip:!
   const path=join(root,'fixture.o');
   execFileSync('cc',['-c','-O0','-o',path,new URL('./fixture.c',import.meta.url).pathname]);
   const value=await analyze(path,{root,signal:AbortSignal.timeout(15000)});
+  assert.equal(value.engine_version,'6.7.0');assert.equal(value.result_schema_version,'rea-native-layout-v1');
   assert.equal(value.layout.format,'elf');assert.equal(value.layout.image_type,'ET_REL');
   assert.ok(value.layout.sections.length>0);assert.ok(value.layout.relocations.length>0);
   assert.ok(JSON.stringify(value.layout.symbols).includes('rea_fixture_add'));

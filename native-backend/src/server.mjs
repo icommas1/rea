@@ -4,7 +4,7 @@ import { mkdtemp, open, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { analyze, capabilities } from './adapter.mjs';
+import { analyze, capabilities, closeNativeProviders } from './adapter.mjs';
 import { createAuth, EMPTY_SHA256, AUTH_LIMITS } from './auth.mjs';
 
 const MAX = capabilities.limits.uploadBytes;
@@ -21,18 +21,19 @@ function validateElf(head) {
   if (head[4] !== 2 || head[5] !== 1 || head.readUInt16LE(18) !== 62 || ![1,2,3].includes(head.readUInt16LE(16)))
     throw fault(415, 'unsupported_target', 'Only ELF64 little-endian x86-64 EXEC/DYN/REL is supported.');
 }
-export function createServer({key = process.env.REA_API_KEY, publicKeyPem = process.env.REA_AUTH_PUBLIC_KEY_PEM, issuer = process.env.REA_AUTH_ISSUER, audience = process.env.REA_AUTH_AUDIENCE, authNow = Date.now, runAnalysis = analyze, tempParent = join(tmpdir(),'rea-native-service'), uploadTimeoutMs = 10000, analysisTimeoutMs = capabilities.limits.analysisMilliseconds} = {}) {
+export function createServer({key = process.env.REA_API_KEY, publicKeyPem = process.env.REA_AUTH_PUBLIC_KEY_PEM, issuer = process.env.REA_AUTH_ISSUER, audience = process.env.REA_AUTH_AUDIENCE, authNow = Date.now, runAnalysis = analyze, cleanupAnalysis = closeNativeProviders, tempParent = join(tmpdir(),'rea-native-service'), uploadTimeoutMs = 10000, analysisTimeoutMs = capabilities.limits.analysisMilliseconds} = {}) {
   const auth = createAuth({bearerKey:key,publicKeyPem,issuer,audience,now:authNow});
   let challengeActive = 0;
   let active = false;
   let healthy = true;
+  const retainedRoots = new Set();
   let cancelActive = () => {};
   const server = http.createServer(async (req,res) => {
     let root, handle, controller, timer, uploadTimer, onClose;
     let ownsSlot = false, ownsChallengeSlot = false;
     try {
       if (req.method === 'GET' && req.url === '/healthz') {
-        send(res, healthy ? 200 : 503, {status: healthy ? 'ok' : 'unhealthy', analysisEnabled: auth.enabled && healthy}); return;
+        send(res, healthy ? 200 : 503, {status: healthy ? 'ok' : 'unhealthy', analysisEnabled: auth.enabled && healthy, reaVersion: capabilities.reaVersion, serviceVersion: capabilities.version}); return;
       }
       if (!auth.enabled || !healthy) throw fault(503,'disabled','Analysis is disabled until server authentication is configured and cleanup is healthy.');
       if (req.method === 'POST' && req.url === '/v1/challenge') {
@@ -103,7 +104,12 @@ export function createServer({key = process.env.REA_API_KEY, publicKeyPem = proc
       active=false; ownsSlot=false;
       send(res,200,response);
     } catch(error) {
-      if (error.cleanupIncomplete) healthy=false;
+      if (error.cleanupIncomplete) {
+        healthy=false;
+        // An unresolved parser may still own these files. Retain the server's
+        // directory owner until provider cleanup has been verified on shutdown.
+        if (root) { retainedRoots.add(root); root=null; }
+      }
       await handle?.close().catch(()=>{}); handle=null;
       if (root) {
         try {await rm(root,{recursive:true,force:true}); root=null;}
@@ -129,11 +135,18 @@ export function createServer({key = process.env.REA_API_KEY, publicKeyPem = proc
   server.keepAliveTimeout=1000;
   server.maxConnections=16;
   server.cancelActive = () => {auth.clear();cancelActive();};
+  server.closeAnalysis = async () => {
+    await cleanupAnalysis();
+    for (const root of retainedRoots) {
+      await rm(root,{recursive:true,force:true});
+      retainedRoots.delete(root);
+    }
+  };
   return server;
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const server=createServer();
   server.listen(Number(process.env.PORT || 8080),'0.0.0.0',()=>console.log('REA native backend listening'));
-  const stop=()=>{server.cancelActive(); server.close(()=>process.exit(0)); setTimeout(()=>process.exit(1),20000).unref();};
+  const stop=()=>{server.cancelActive(); server.close(async()=>{try {await server.closeAnalysis();process.exit(0);} catch {process.exit(1);}}); setTimeout(()=>process.exit(1),20000).unref();};
   process.on('SIGTERM',stop); process.on('SIGINT',stop);
 }

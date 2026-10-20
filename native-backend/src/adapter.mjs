@@ -5,10 +5,12 @@ import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFile } from 'node:fs/promises';
+import { inspectAndCloseProvider } from './provider-lifecycle.mjs';
+export { closeNativeProviders } from './provider-lifecycle.mjs';
 
 export const ANALYSIS_TIMEOUT_MS = Math.min(30000, Math.max(15000, Number(process.env.ANALYSIS_TIMEOUT_MS) || 30000));
 export const capabilities = Object.freeze({
-  service: 'rea-native-backend', version: '0.1.0', reaVersion: '6.4.0',
+  service: 'rea-native-backend', version: '0.2.0', reaVersion: '6.7.0',
   profile: 'static-elf-layout', host: 'linux-x64',
   formats: ['ELF64 little-endian x86-64 EXEC/DYN/REL'],
   features: ['sections', 'segments', 'symbols', 'relocations', 'dependency-names', 'GOT candidates', 'static-mitigation-candidates'],
@@ -26,7 +28,7 @@ export async function analyze(path, {signal, root}) {
     PWNLIB_NOTERM: '1', OPENBLAS_NUM_THREADS: '1', OMP_NUM_THREADS: '1',
   };
   const provider = new PwntoolsLayoutProvider(environment, (options) => spawnOwnedProviderProcess({...options, expectedCommand:null}), () => PrivateRuntimeRoot.create({parent: root, prefix: 'decoder-'}));
-  const result = await provider.inspect({path}, {signal});
+  const result = await inspectAndCloseProvider(provider, {path}, {signal});
   if (!result.ok) {
     const tag = result.error?._tag || 'AnalysisError';
     const error = new Error('The ELF adapter could not produce a complete result within this service profile.');
@@ -42,7 +44,9 @@ export async function analyze(path, {signal, root}) {
   const bytes = await readFile(path);
   const sha256 = createHash('sha256').update(bytes).digest('hex');
   if (sha256 !== artifact.sha256) throw new Error('Artifact changed during analysis');
-  return {profile: capabilities.profile, provider: provider.identity,
+  return {engine: 'rea-agents', engine_version: capabilities.reaVersion,
+    result_schema_version: 'rea-native-layout-v1',
+    profile: capabilities.profile, provider: provider.identity,
     artifact: {sha256, bytes: artifact.bytes}, layout,
     diagnostics: {
       outputPresent: Boolean(diagnostics.stdout || diagnostics.stderr),

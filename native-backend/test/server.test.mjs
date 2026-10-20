@@ -24,4 +24,15 @@ test('analysis errors sanitized and files cleaned',async t=>{const{post,tempPare
 test('concurrency one includes upload/analysis; next request rejected',async t=>{let release,started;const ready=new Promise(r=>started=r);const gate=new Promise(r=>release=r);const{post}=await setup(t,{runAnalysis:async()=>{started();await gate;return{}}});const first=post();await ready;assert.equal((await post()).status,429);release();assert.equal((await first).status,200)});
 test('analysis timeout cancels parser and cleans files',async t=>{const{post,tempParent}=await setup(t,{analysisTimeoutMs:10,runAnalysis:async(path,{signal})=>new Promise(resolve=>signal.addEventListener('abort',()=>resolve({}),{once:true}))});assert.equal((await post()).status,504);await new Promise(r=>setTimeout(r,20));assert.deepEqual(await readdir(tempParent),[])});
 test('uncertain parser cleanup disables all subsequent analysis',async t=>{const{post,base}=await setup(t,{runAnalysis:async()=>{throw Object.assign(new Error('cleanup failed'),{cleanupIncomplete:true,status:503,code:'cleanup_incomplete'})}});assert.equal((await post()).status,503);const h=await fetch(base+'/healthz');assert.equal(h.status,503);assert.equal((await h.json()).analysisEnabled,false);assert.equal((await post()).status,503)});
+test('uncertain parser ownership retains files until verified shutdown cleanup',async()=>{
+ const tempParent=await mkdtemp('/tmp/rea-retained-');let canClose=false;
+ const server=createServer({key,tempParent,runAnalysis:async()=>{throw Object.assign(new Error('owned'),{cleanupIncomplete:true,status:503,code:'cleanup_incomplete'});},cleanupAnalysis:async()=>{if(!canClose)throw Error('still owned');}});
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));
+ try {
+  const response=await fetch(`http://127.0.0.1:${server.address().port}/v1/analyze`,{method:'POST',headers:{authorization:`Bearer ${key}`,'content-type':'application/octet-stream'},body:head});
+  assert.equal(response.status,503);assert.equal((await readdir(tempParent)).length,1);
+  await assert.rejects(server.closeAnalysis());assert.equal((await readdir(tempParent)).length,1);
+  canClose=true;await server.closeAnalysis();assert.deepEqual(await readdir(tempParent),[]);
+ }finally{await new Promise(r=>server.close(r));await rm(tempParent,{recursive:true,force:true});}
+});
 test('shutdown cancellation reaches current parser',async t=>{let started;const ready=new Promise(r=>started=r);const tempParent=await mkdtemp('/tmp/rea-stop-test-');const server=createServer({key,tempParent,runAnalysis:async(path,{signal})=>new Promise(resolve=>{started();signal.addEventListener('abort',()=>resolve({}),{once:true})})});await new Promise(r=>server.listen(0,'127.0.0.1',r));try{const pending=fetch(`http://127.0.0.1:${server.address().port}/v1/analyze`,{method:'POST',headers:{authorization:`Bearer ${key}`,'content-type':'application/octet-stream'},body:head});await ready;server.cancelActive();assert.equal((await pending).status,504);assert.deepEqual(await readdir(tempParent),[]);}finally{await new Promise(r=>server.close(r));await rm(tempParent,{recursive:true,force:true})}});
